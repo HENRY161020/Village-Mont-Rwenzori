@@ -1,180 +1,128 @@
-from flask import Flask, render_template_string, request, redirect, session, send_from_directory
-import datetime, json, os
+from flask import Flask, render_template_string, request, redirect, session
+from datetime import datetime
 app = Flask(__name__)
-app.secret_key = 'hao_final_2j'
-
-CODE_GERANT = "1234"
-CODE_VENDEUR = "0000"
-CODE_ACTIVATION = "HAOJUE2026"
-
-boutique = {
-    "nom": "HAOJUE",
-    "proprio": "Ets Kasereka Nzoli",
-    "tel": "0861527310",
-    "adresse": "KALEMIE",
-    "rccm": "KJJLKIOI",
-    "logo_text": "HJ",
-    "couleur": "#0d47a1",
-    "slogan": "Concessionnaire Officiel Motos"
+app.secret_key = 'village-rwenzori-1mois-pro-bleu-2026'
+BOUTIQUE = {
+    "nom": "VILLAGE MONT RWENZORI",
+    "proprio": "NADEGE KAHINDO",
+    "tels": "0994613894 / 0976844928 / 0826445928",
+    "adresse": "Q. FILTISAF / Av DE LA VICTOIRE",
+    "couleur": "#0b3d91",
+    "devise": "$",
+    "abonnement": "PRO 1 MOIS",
+    "expire": "24/10/2026",
+    "mpesa": "0861527310",
+    "orange": "0847139266"
 }
-# ABONNEMENT 2 JOURS POUR TEST
-abonnement = {"expire_le": datetime.date.today() + datetime.timedelta(days=2), "actif": True, "mpesa": "0861527310", "orange": "0847139266", "prix": "10$ / 28.000 FC"}
-produits = []
-factures = []
-
-def check_abo():
-    if datetime.date.today() > abonnement["expire_le"]:
-        abonnement["actif"]=False
-    return abonnement["actif"]
-
-@app.route('/logo.png')
-def logo():
-    if os.path.exists('logo.png'):
-        return send_from_directory('.', 'logo.png')
-    return "", 404
-
-BASE = """
-<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<style>body{background:#f0f2f5}.sidebar{background:#0d47a1;min-height:100vh;color:white;padding-top:20px}
-.sidebar a{color:#bbdefb;text-decoration:none;display:block;padding:12px 20px;margin:4px 10px;border-radius:8px}.sidebar a.active{background:#1565c0;color:white}
-.topbar{background:white;padding:15px;border-bottom:1px solid #e2e8f0}.kpi{background:white;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
-</style></head><body>
-<div class="container-fluid"><div class="row">
-<div class="col-2 sidebar">
-<h5 class="px-3">🏍️ {{ boutique.nom }}</h5><small class="px-3">{{ boutique.proprio }}</small><br>
-<span class="px-3 badge bg-{{ 'success' if session.get('role')=='gerant' else 'warning text-dark' }}">{{ session.get('role','')|upper }}</span><br>
-<div class="px-3 mt-2"><small class="text-{{ 'success' if abo_actif else 'danger' }}">Abo: {{ jours_restants }}j - {{ abo_date }}</small></div><br>
-<a href="/dashboard">📊 Vente</a><a href="/produits">📦 Inventaire 🔒</a><a href="/factures">🧾 Factures</a>
-<a href="/abonnement" style="background:#ff7a00;color:white;display:block;padding:12px 20px;border-radius:8px;text-decoration:none">💳 Abo 10$ - 2j test</a>
-<a href="/logout" class="mt-4 d-block px-3">🚪 Quitter</a>
-</div>
-<div class="col-10 p-0"><div class="topbar d-flex justify-content-between"><b>{{ boutique.nom }} - {{ boutique.adresse }}</b><span class="badge bg-{{ 'success' if abo_actif else 'danger' }}">{{ jours_restants }} jours restants</span></div>
-<div class="p-4">{{ content|safe }}</div></div></div></div></body></html>
-"""
-
-def render_page(page, content):
-    abo_actif = check_abo()
-    jours = (abonnement["expire_le"] - datetime.date.today()).days
-    return render_template_string(BASE, page=page, content=content, boutique=boutique, abonnement=abonnement, today=datetime.date.today(), session=session, abo_actif=abo_actif, abo_date=abonnement["expire_le"], jours_restants=max(0,jours))
-
+EXPIRE_DATE = datetime(2026, 10, 24, 23, 59, 59)
+STOCK = {}
+VENTES = []
+PIN_GERANT = "1234"
+PIN_VENDEUR = "0000"
+class Item:
+    def __init__(self, qte, prix):
+        self.qte = qte
+        self.prix = prix
+def is_expired():
+    return datetime.now() > EXPIRE_DATE
+EXPIRE_HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Expire</title><style>body{background:#fff3f3;font-family:Arial;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:15px}.card{background:#fff;padding:28px;border-radius:16px;box-shadow:0 8px 25px rgba(0,0,0,.15);width:95%;max-width:420px;text-align:center;border:2px solid #dc3545}h2{color:#dc3545}.pay-box{background:#f8f9fa;border:1px dashed #0b3d91;padding:14px;border-radius:10px;margin:15px 0;text-align:left}.num{font-size:18px;font-weight:bold;color:#0b3d91}</style></head><body><div class="card"><h2>ABONNEMENT EXPIRE</h2><p>Systeme <b>{{b.nom}}</b> expire le {{b.expire}}</p><div class="pay-box"><b>Pour reactiver 1 MOIS, payez :</b><br><br>M-Pesa : <span class="num">{{b.mpesa}}</span><br>Orange Money : <span class="num">{{b.orange}}</span><br><br>Montant: 10$ / mois<br>Apres paiement contactez dev</div></div></body></html>'''
+LOGIN_HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{b.nom}}</title><style>body{background:#eef3ff;font-family:Arial;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}.card{background:#fff;padding:32px;border-radius:18px;box-shadow:0 8px 25px rgba(0,0,0,.12);width:92%;max-width:390px;text-align:center}h2{color:{{b.couleur}};margin:0}input{width:100%;padding:15px;margin:14px 0;border:1px solid #ccc;border-radius:12px;box-sizing:border-box}button{width:100%;padding:14px;background:{{b.couleur}};color:#fff;border:none;border-radius:12px;font-weight:bold}.badge{background:#d4edda;color:#155724;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:bold;margin-top:14px;display:inline-block}.pay{background:#f0f4ff;padding:10px;border-radius:8px;margin-top:12px;font-size:12px;text-align:left}</style></head><body><div class="card"><h2>{{b.nom}}</h2><div style="color:#666;font-size:13px;margin:10px 0">Prop: {{b.proprio}}<br>{{b.adresse}}<br>{{b.tels}}</div><h3 style="color:{{b.couleur}};margin:18px 0 5px">TANGA STOCK V6 PRO</h3><div style="font-size:12px;color:{{b.couleur}};font-weight:bold">{{b.abonnement}} - Expire {{b.expire}}</div><form method="POST"><input type="password" name="pin" placeholder="CODE PIN SECRET" required><button>Entrer</button></form>{% if error %}<p style="color:red">{{error}}</p>{% endif %}<div class="badge">ABONNEMENT ACTIF - 1 MOIS PRO</div><div class="pay"><b>Renouvellement:</b><br>M-Pesa: <b>{{b.mpesa}}</b><br>Orange: <b>{{b.orange}}</b></div></div></body></html>'''
+DASH_HTML = '''
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{b.nom}}</title>
+<style>body{font-family:Arial;background:#f5f7ff;margin:0;padding:10px}.header{background:{{b.couleur}};color:#fff;padding:14px;border-radius:12px;display:flex;justify-content:space-between;align-items:center}.card{background:#fff;padding:15px;border-radius:12px;margin-top:12px;box-shadow:0 2px 10px rgba(0,0,0,.06)}input,button{padding:11px;border-radius:8px;border:1px solid #ccc;font-size:14px}button{background:{{b.couleur}};color:#fff;border:none;font-weight:bold;cursor:pointer}table{width:100%;border-collapse:collapse;margin-top:10px}th{background:{{b.couleur}};color:#fff;padding:10px;text-align:left;font-size:13px}td{border:1px solid #e5e5e5;padding:9px;font-size:13px}.msg{background:#d4edda;color:#155724;padding:10px;border-radius:8px;margin-top:10px}.msg-err{background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;margin-top:10px}</style></head>
+<body>
+<div class="header"><div><b>{{b.nom}}</b><br><small>{{role}} - PRO 1 MOIS expire {{b.expire}}</small></div><div><a href="/logout" style="color:white;text-decoration:none">Sortir</a></div></div>
+{% if msg %}<div class="msg">{{msg}}</div>{% endif %}{% if err %}<div class="msg-err">{{err}}</div>{% endif %}
+{% if role == 'Gérant' %}<div class="card"><h3 style="margin:0 0 10px;color:{{b.couleur}}">+ Ajouter Stock</h3><form method="POST" action="/add" style="display:flex;gap:6px;flex-wrap:wrap"><input name="nom" placeholder="DESCRIPTION" required style="flex:2"><input name="qte" type="number" min="1" placeholder="Qte" required style="flex:1"><input name="prix" type="number" step="0.01" placeholder="PU $" required style="flex:1"><button>Ajouter</button></form></div>{% endif %}
+<div class="card"><h3 style="margin:0;color:{{b.couleur}}">Stock ({{stock|length}})</h3><table><tr><th>Description</th><th>Qte</th><th>PU</th><th>Total</th>{% if role=='Gérant' %}<th>X</th>{% endif %}</tr>{% for nom,data in stock.items() %}<tr><td><b>{{nom}}</b></td><td>{{data.qte}}</td><td>{{data.prix}} $</td><td>{{data.qte*data.prix}} $</td>{% if role=='Gérant' %}<td><a href="/delete/{{nom}}" style="color:red">X</a></td>{% endif %}</tr>{% else %}<tr><td colspan="5" style="text-align:center;color:#888;padding:20px">Stock vide</td></tr>{% endfor %}</table></div>
+<div class="card"><h3 style="margin:0 0 10px;color:{{b.couleur}}">Vendre - Facture PRO BLEU</h3><form method="POST" action="/sell"><div style="display:flex;gap:6px;flex-wrap:wrap"><input name="nom" placeholder="Description a vendre" required style="flex:2"><input name="qte" type="number" min="1" placeholder="Qte" required style="flex:1"><input name="client" placeholder="Client" style="flex:1"><button style="flex:1">Facturer</button></div></form></div>
+{% if ventes %}<div class="card"><h3 style="margin:0;color:{{b.couleur}}">Ventes</h3><table><tr><th>Date</th><th>Client</th><th>Article</th><th>Total</th><th>Facture</th></tr>{% for v in ventes[::-1][:8] %}<tr><td>{{v.date}}</td><td>{{v.client}}</td><td>{{v.qte}}x {{v.nom}}</td><td>{{v.total}} $</td><td><a href="/facture/{{v.id}}" target="_blank">Voir</a></td></tr>{% endfor %}</table></div>{% endif %}
+<div class="card" style="font-size:11px;color:#666;text-align:center">Renouvellement: M-Pesa {{b.mpesa}} | Orange {{b.orange}}<br>{{b.nom}} - {{b.adresse}}</div>
+</body></html>
+'''
+FACTURE_HTML = '''
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Facture {{v.id}}</title><style>body{font-family:Arial;margin:0;padding:20px;background:#fff}.header{border-bottom:3px solid {{b.couleur}};padding-bottom:12px;display:flex;justify-content:space-between}h1{color:{{b.couleur}};margin:0}table{width:100%;border-collapse:collapse;margin-top:20px}th{background:{{b.couleur}};color:#fff;padding:12px;text-align:left}td{border:1px solid #ddd;padding:10px}.total-row{font-weight:bold;background:#f5f7ff}.footer{margin-top:25px;text-align:center;font-size:11px;color:#666;border-top:1px solid #ddd;padding-top:10px}.btn{padding:12px 22px;background:{{b.couleur}};color:#fff;border:none;border-radius:8px;font-weight:bold}@media print{.no-print{display:none}}</style></head>
+<body><div class="header"><div><h1>{{b.nom}}</h1><div style="font-size:13px">Prop: {{b.proprio}}<br>{{b.adresse}}<br>{{b.tels}}</div></div><div style="text-align:right;font-size:13px"><b style="color:{{b.couleur}}">FACTURE</b><br>N°: {{v.id}}<br>Date: {{v.date}}<br>Vendeur: {{v.vendeur}}</div></div><div style="margin-top:15px"><b>Client:</b> {{v.client}}</div><table><tr><th>Description</th><th>Qte</th><th>PU</th><th>Total</th></tr><tr><td>{{v.nom}}</td><td>{{v.qte}}</td><td>{{v.pu}} $</td><td>{{v.total}} $</td></tr><tr class="total-row"><td colspan="3" style="text-align:right">TOTAL A PAYER</td><td>{{v.total}} $</td></tr></table><div class="footer">{{b.nom}} - {{b.adresse}} - {{b.tels}}<br>Merci! TANGA STOCK V6 BLEU PRO<br>Support Paiement: M-Pesa {{b.mpesa}} | Orange Money {{b.orange}}</div><center><button class="btn no-print" onclick="window.print()">Imprimer Facture</button> <a href="/stock" class="no-print" style="margin-left:10px">Retour</a></center></body></html>
+'''
 @app.route('/', methods=['GET','POST'])
 def login():
+    if is_expired():
+        return render_template_string(EXPIRE_HTML, b=BOUTIQUE)
+    error=None
     if request.method=='POST':
-        code=request.form['code'].strip(); session.clear()
-        if code==CODE_GERANT: session['role']='gerant'; session['gerant_unlocked']=True; return redirect('/dashboard')
-        elif code==CODE_VENDEUR: session['role']='vendeur'; session['gerant_unlocked']=False; return redirect('/dashboard')
-        else: return "<h3>Code faux 1234/0000 <a href='/'>Retour</a></h3>"
-    return f"""<html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>body{{background:#e3f2fd;display:flex;justify-content:center;align-items:center;height:100vh}}.box{{background:white;padding:35px;border-radius:16px;width:380px;text-align:center}}</style></head><body>
-    <div class="box"><img src="/logo.png" style="max-height:80px" onerror="this.style.display='none'"><h4 style="color:#0d47a1">{boutique['nom']} - KALEMIE</h4><small>Test 2 jours - Gérant remplit seul</small><p class="mt-3"><b>TANGA STOCK PRO</b></p>
-    <form method="POST"><input name="code" type="password" class="form-control form-control-lg mb-3" placeholder="CODE PIN" required><button class="btn btn-primary w-100" style="background:#0d47a1">Entrer</button></form><hr><small>Gérant 1234 = remplit stock / Vendeur 0000 = vend seulement</small></div></body></html>"""
-
-@app.route('/dashboard', methods=['GET','POST'])
+        pin=request.form.get('pin','').strip()
+        if pin==PIN_GERANT:
+            session['role']='Gérant'
+            return redirect('/stock')
+        elif pin==PIN_VENDEUR:
+            session['role']='Vendeur'
+            return redirect('/stock')
+        else:
+            error="Code incorrect"
+    return render_template_string(LOGIN_HTML, b=BOUTIQUE, error=error)
+@app.route('/stock')
 def dash():
-    if 'role' not in session: return redirect('/')
-    if not check_abo(): return redirect('/abonnement')
-    if request.method=='POST' and produits:
-        items=[]; total_fact=0
-        for i in range(1,5):
-            pid=request.form.get(f'produit_{i}'); qte=request.form.get(f'qte_{i}')
-            if pid and qte and qte.isdigit() and int(qte)>0:
-                p=next((x for x in produits if str(x['id'])==pid), None)
-                if p and p['stock']>=int(qte):
-                    p['stock']-=int(qte); ligne_total=int(qte)*p['vente']
-                    items.append({"desc":p['nom'],"sku":p['sku'],"qte":int(qte),"pu":p['vente'],"total":ligne_total})
-                    total_fact+=ligne_total
-        if items:
-            fid=f"FAC-HJ-{len(factures)+1:03d}"
-            factures.append({"id":fid,"client":request.form['client'],"tel":request.form['tel'],"date":datetime.datetime.now().strftime("%d/%m/%Y"),"items":items,"total":total_fact,"status":request.form['status']})
-            return redirect(f'/facture/{fid}')
-    if not produits:
-        c = """<div class="kpi text-center" style="padding:40px"><h2>📦 STOCK VIDE</h2><p>Le <b>Gérant (1234)</b> doit aller dans Inventaire et ajouter les produits.<br>Le vendeur ne peut PAS toucher l'inventaire.</p></div>"""
-        return render_page('dash', c)
-    opts="".join([f"<option value='{p['id']}'>{p['nom']} - {p['vente']} FC (Stock:{p['stock']})</option>" for p in produits])
-    prix_map = {str(p['id']): p['vente'] for p in produits}
-    prix_json = json.dumps(prix_map)
-    c=f"""<div class="kpi"><h4>🛒 Vente - Prix FIXE, Calcul AUTO</h4><form method="POST" class="mt-3"><div class="row g-2"><div class="col-5"><input name="client" class="form-control" placeholder="Client" required></div><div class="col-4"><input name="tel" class="form-control" placeholder="Tel client"></div><div class="col-3"><select name="status" class="form-control"><option>Payé</option><option>Dette</option><option>Devis</option></select></div></div>
-    <table class="table mt-3 table-bordered"><tr><th>Description (FIXE)</th><th>Qté</th><th>PU</th><th>Total AUTO</th></tr>
-    <tr><td><select name="produit_1" id="p1" class="form-control" onchange="calc()">{opts}</select></td><td><input name="qte_1" id="q1" type="number" value="1" class="form-control" oninput="calc()"></td><td><span id="pu1"></span> FC</td><td><span id="t1"></span></td></tr>
-    <tr><td><select name="produit_2" id="p2" class="form-control" onchange="calc()"><option value="">--</option>{opts}</select></td><td><input name="qte_2" id="q2" type="number" value="0" class="form-control" oninput="calc()"></td><td><span id="pu2"></span></td><td><span id="t2"></span></td></tr>
-    </table><h3 class="text-end">Total: <span id="grand_total" style="color:#0d47a1">0 FC</span></h3><button class="btn btn-primary w-100 p-3" style="background:#0d47a1">✅ VENDRE - Calcul AUTO</button></form></div>
-    <script>let prixMap={prix_json}; function calc(){{let gt=0; for(let i=1;i<=2;i++){{let sel=document.getElementById('p'+i); if(!sel) continue; let q=parseInt(document.getElementById('q'+i).value||0); let pu=prixMap[sel.value]||0; document.getElementById('pu'+i).innerText=pu; let tot=q*pu; document.getElementById('t'+i).innerText=tot?tot+' FC':''; gt+=tot;}} document.getElementById('grand_total').innerText=gt+' FC';}} calc();</script>"""
-    return render_page('dash', c)
-
-@app.route('/produits', methods=['GET','POST'])
-def prods():
-    if 'role' not in session: return redirect('/')
-    if not check_abo(): return redirect('/abonnement')
-    # BLOQUER VENDEUR - SEUL GERANT REMPLIT
-    if session.get('role')=='vendeur':
-        c = """<div style="background:#fef2f2;border:3px dashed #ef4444;padding:40px;text-align:center;border-radius:16px"><h1>🔒 INVENTAIRE BLOQUÉ VENDEUR</h1><p>Seul le Gérant (code 1234) peut remplir le stock.<br>Toi tu vends seulement. Prix FIXE, tu ne touches pas.</p><a href="/dashboard" class="btn btn-primary">Aller vendre</a></div>"""
-        return render_page('prod', c)
-    # GERANT ONLY
-    if request.method=='POST':
-        if request.form.get('action')=='add':
-            nid=len(produits)+1
-            produits.append({"id":nid,"nom":request.form['nom'],"sku":request.form['sku'],"achat":int(request.form.get('achat',0)),"vente":int(request.form['vente']),"stock":int(request.form['stock'])})
-        elif request.form.get('action')=='delete_all':
-            produits.clear(); factures.clear()
-        elif request.form.get('action')=='delete_one':
-            pid=int(request.form.get('id')); produits[:] = [p for p in produits if p['id']!=pid]
-            return redirect('/produits')
-    rows="".join([f"<tr><td>{p['sku']}</td><td>{p['nom']}</td><td>{p['stock']}</td><td><b>{p['vente']} FC</b> 🔒</td><td><form method='POST'><input type='hidden' name='action' value='delete_one'><input type='hidden' name='id' value='{p['id']}'><button class='btn btn-sm btn-danger'>X</button></form></td></tr>" for p in produits])
-    c=f"""
-    <div class="kpi"><h4>📦 Inventaire - GÉRANT SEUL - {len(produits)} produits</h4><div class="alert alert-warning">Mode Gérant 1234: Toi seul remplit. Vendeur 0000 ne peut pas toucher.</div>
-    <form method="POST" class="row g-2 p-3" style="background:#e3f2fd;border-radius:10px"><input type="hidden" name="action" value="add">
-    <div class="col-3"><input name="nom" class="form-control" placeholder="Ex: Moto Haojue 125" required></div><div class="col-2"><input name="sku" class="form-control" placeholder="SKU HJ125" required></div>
-    <div class="col-2"><input name="achat" type="number" class="form-control" placeholder="Achat FC" required></div><div class="col-2"><input name="vente" type="number" class="form-control" placeholder="Vente FIXE FC" required></div>
-    <div class="col-2"><input name="stock" type="number" class="form-control" placeholder="Stock" required></div><div class="col-1"><button class="btn btn-primary w-100" style="background:#0d47a1">+ Ajouter</button></div></form>
-    <table class="table mt-3"><tr><th>SKU</th><th>Nom</th><th>Stock</th><th>Prix FIXE</th><th>Del</th></tr>{rows if rows else "<tr><td colspan=5 class='text-center'>Stock vide - Ajoute produits ci-dessus</td></tr>"}</table>
-    <form method="POST" onsubmit="return confirm('Supprimer tout pour test?')"><input type="hidden" name="action" value="delete_all"><button class="btn btn-outline-danger">🗑️ Supprimer tout le stock (Reset Test)</button></form>
-    </div>"""
-    return render_page('prod', c)
-
-@app.route('/factures')
-def facts():
-    if 'role' not in session: return redirect('/')
-    if not check_abo(): return redirect('/abonnement')
-    rows="".join([f"<tr><td>{f['id']}</td><td>{f['client']}</td><td>{f['total']} FC</td><td><a href='/facture/{f['id']}' class='btn btn-sm btn-dark'>Voir</a></td></tr>" for f in factures])
-    return render_page('fact', f"<div class='kpi'><h4>Factures</h4><table class='table'><tr><th>N°</th><th>Client</th><th>Total</th><th>PDF</th></tr>{rows}</table></div>")
-
+    if is_expired():
+        return render_template_string(EXPIRE_HTML, b=BOUTIQUE)
+    if 'role' not in session:
+        return redirect('/')
+    return render_template_string(DASH_HTML, b=BOUTIQUE, role=session['role'], stock=STOCK, ventes=VENTES, msg=request.args.get('msg'), err=request.args.get('err'))
+@app.route('/add', methods=['POST'])
+def add():
+    if is_expired():
+        return render_template_string(EXPIRE_HTML, b=BOUTIQUE)
+    if session.get('role')!='Gérant':
+        return redirect('/stock?err=Gerant uniquement')
+    nom=request.form.get('nom','').strip().upper()
+    try:
+        qte=int(request.form.get('qte',0))
+        prix=float(request.form.get('prix',0))
+    except:
+        return redirect('/stock?err=Invalide')
+    if nom:
+        if nom in STOCK:
+            STOCK[nom].qte+=qte
+            STOCK[nom].prix=prix
+        else:
+            STOCK[nom]=Item(qte,prix)
+    return redirect('/stock?msg=Ajoute '+nom)
+@app.route('/delete/<nom>')
+def delete(nom):
+    if session.get('role')!='Gérant':
+        return redirect('/stock')
+    STOCK.pop(nom,None)
+    return redirect('/stock?msg=Supprime')
+@app.route('/sell', methods=['POST'])
+def sell():
+    if is_expired():
+        return render_template_string(EXPIRE_HTML, b=BOUTIQUE)
+    if 'role' not in session:
+        return redirect('/')
+    nom=request.form.get('nom','').strip().upper()
+    client=request.form.get('client','').strip() or "Client"
+    try:
+        qte=int(request.form.get('qte',0))
+    except:
+        return redirect('/stock?err=Qte invalide')
+    if nom not in STOCK:
+        return redirect('/stock?err=Introuvable')
+    if STOCK[nom].qte<qte:
+        return redirect('/stock?err=Stock insuffisant')
+    pu=STOCK[nom].prix
+    total=qte*pu
+    STOCK[nom].qte-=qte
+    vente={"id": "FAC"+datetime.now().strftime('%y%m%d%H%M%S'),"date": datetime.now().strftime('%d/%m/%Y %H:%M'),"nom": nom,"qte": qte,"pu": pu,"total": total,"client": client,"vendeur": session.get('role')}
+    VENTES.append(vente)
+    return redirect('/facture/'+vente['id'])
 @app.route('/facture/<fid>')
-def facture_page(fid):
-    f=next((x for x in factures if x['id']==fid), None)
-    if not f: return "Non trouvé"
-    rows="".join([f"<tr><td><b>{it['desc']}</b><br><small>{it['sku']}</small></td><td>{it['qte']}</td><td>{it['pu']:,} FC</td><td>{it['total']:,} FC</td></tr>" for it in f['items']])
-    return f"""
-    <!DOCTYPE html><html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><style>@media print{{.no-print{{display:none}}}} body{{background:#eee}}.paper{{background:white;max-width:850px;margin:20px auto;padding:0}}.entete{{background:{boutique['couleur']};color:white;padding:25px 40px}}</style></head><body>
-    <div class="text-center p-3 no-print"><a href="/dashboard" class="btn btn-secondary">Retour</a> <button onclick="window.print()" class="btn btn-primary" style="background:{boutique['couleur']}">🖨️ Imprimer / PDF</button></div>
-    <div class="paper"><div class="entete d-flex justify-content-between"><div><img src="/logo.png" style="height:50px;background:white;padding:5px;border-radius:8px" onerror="this.style.display='none'"><h3>{boutique['nom']}</h3><small>{boutique['slogan']}<br>{boutique['adresse']} - Tel: {boutique['tel']}<br>RCCM: {boutique['rccm']}</small></div><div class="text-end"><h2>FACTURE</h2>{f['id']}<br>{f['date']}<br>{f['status']}</div></div>
-    <div class="p-4"><b>Client:</b> {f['client']} - {f.get('tel','')}<table class="table table-bordered mt-3"><thead style="background:#e3f2fd"><tr><th>Description</th><th>Quantité</th><th>Prix Unitaire</th><th>Prix Total</th></tr></thead><tbody>{rows}</tbody></table><div class="row"><div class="col-7"><small>Merci chez HAOJUE KALEMIE!</small></div><div class="col-5"><table class="table"><tr style="background:{boutique['couleur']};color:white"><td><b>TOTAL</b></td><td><b>{f['total']:,} FC</b></td></tr></table></div></div></div></div></body></html>
-    """
-
-@app.route('/abonnement', methods=['GET','POST'])
-def abo():
-    if 'role' not in session: return redirect('/')
-    msg=""; 
-    if request.method=='POST' and request.form.get('code_activation')==CODE_ACTIVATION:
-        abonnement["expire_le"]=datetime.date.today()+datetime.timedelta(days=2); abonnement["actif"]=True; msg="<div class='alert alert-success'>✅ Activé 2 jours! 10$ reçu!</div>"
-    jours = (abonnement["expire_le"] - datetime.date.today()).days
-    bloque = "" if check_abo() else f"""<div style="background:#fef2f2;border:3px solid red;padding:30px;text-align:center;border-radius:16px"><h1>⛔ ABONNEMENT EXPIRÉ</h1><p>Ton test de 2 jours a expiré le {abonnement['expire_le']}. Paie pour continuer.</p></div>"""
-    c=f"""
-    {bloque}{msg}
-    <div class="kpi" style="max-width:600px;margin:20px auto"><h3 class="text-center">💳 Abonnement HAOJUE - TEST 2 JOURS</h3><h1 class="text-center">10$ / 28.000 FC</h1><p class="text-center">Expire le {abonnement['expire_le']} - Reste {max(0,jours)} jours</p><hr>
-    <h5>📱 Payer ton abonnement:</h5><div class="p-3" style="background:#e3f2fd;border-radius:10px">
-    <b style="color:#f44336">M-Pesa:</b> <b>0861527310</b> - Nom: Ets Kasereka<br>Montant: 28.000 FC - Réf: HAOJUE<br><br>
-    <b style="color:#ff6d00">Orange Money:</b> <b>0847139266</b> - Nom: Ets Kasereka<br>Montant: 28.000 FC<br><br>
-    <small>Après paiement, envoie capture WhatsApp au 0861527310, tu recevras code d'activation</small>
-    </div>
-    <form method="POST" class="mt-4"><label><b>Code activation reçu:</b></label><input name="code_activation" class="form-control form-control-lg mt-2" placeholder="HAOJUE2026" required><button class="btn btn-warning w-100 p-3 mt-3 fw-bold" style="background:#ff7a00;color:white">🔓 ACTIVER 2 JOURS</button></form>
-    <hr><small>Code démo test: <b>HAOJUE2026</b></small></div>
-    """
-    return render_page('abo', c)
-
+def facture(fid):
+    v=next((x for x in VENTES if x['id']==fid),None)
+    if not v:
+        return redirect('/stock?err=Facture introuvable')
+    return render_template_string(FACTURE_HTML, b=BOUTIQUE, v=v)
 @app.route('/logout')
-def logout(): session.clear(); return redirect('/')
-
+def logout():
+    session.clear()
+    return redirect('/')
 if __name__=='__main__':
-    print(f"HAOJUE FINAL - Gérant remplit seul - 2 jours - M-Pesa 0861527310 - Orange 0847139266 - http://127.0.0.1:5000")
-    app.run(debug=False)
+    app.run(host='0.0.0.0', port=5000)
