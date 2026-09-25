@@ -1,8 +1,20 @@
+import os
 from flask import Flask, render_template_string, request, redirect, session
 from datetime import datetime, date
+from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
 app.secret_key = 'village-rwenzori-pro-1mois-visible-abo-2026'
+
+# --- Connexion a la base de donnees ---
+# En local (sur ton ordinateur), s'il n'y a pas de DATABASE_URL, on utilise un simple fichier SQLite (boutique.db).
+# Sur Render, DATABASE_URL est fournie automatiquement des que tu attaches une base PostgreSQL a ton service.
+db_url = os.environ.get('DATABASE_URL', 'sqlite:///boutique.db')
+if db_url.startswith('postgres://'):
+    db_url = db_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
 BOUTIQUE = {
     "nom": "VILLAGE MONT RWENZORI",
@@ -17,16 +29,66 @@ BOUTIQUE = {
 
 EXPIRE_DATE = datetime(2026, 10, 24, 23, 59, 59)
 
-# STOCK : prix_achat (cout) et prix_vente (prix affiche au client) pour calculer la marge
-STOCK = {
-    "RIZ":    {"qte": 50, "prix_achat": 2500, "prix_vente": 3000},
-    "SUCRE":  {"qte": 30, "prix_achat": 2000, "prix_vente": 2500},
-    "FARINE": {"qte": 20, "prix_achat": 1600, "prix_vente": 2000},
-}
-
-VENTES = []      # factures finalisees (chacune avec plusieurs lignes)
+SEUIL_ALERTE_STOCK = 5   # en dessous de cette quantite, le produit est signale en alerte
 PIN_GERANT = "1234"
 PIN_VENDEUR = "0000"
+
+
+# ---------------------------------------------------------------- MODELES (= les "tableaux" du cahier)
+# Chaque classe ci-dessous devient une vraie table dans la base de donnees.
+
+class Produit(db.Model):
+    nom = db.Column(db.String(80), primary_key=True)
+    qte = db.Column(db.Integer, default=0)
+    prix_achat = db.Column(db.Integer, default=0)
+    prix_vente = db.Column(db.Integer, default=0)
+
+
+class Vente(db.Model):
+    id = db.Column(db.String(30), primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
+    date = db.Column(db.String(30))
+    client = db.Column(db.String(120))
+    tel = db.Column(db.String(30))
+    vendeur = db.Column(db.String(30))
+    total = db.Column(db.Integer, default=0)
+    marge = db.Column(db.Integer, default=0)
+    lignes = db.relationship('LigneVente', backref='vente', cascade='all, delete-orphan')
+
+
+class LigneVente(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    vente_id = db.Column(db.String(30), db.ForeignKey('vente.id'))
+    nom = db.Column(db.String(80))
+    qte = db.Column(db.Integer)
+    prix_vente = db.Column(db.Integer)
+    prix_achat = db.Column(db.Integer)
+
+
+class Depense(db.Model):
+    id = db.Column(db.String(30), primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
+    date = db.Column(db.String(30))
+    nom = db.Column(db.String(80))
+    qte = db.Column(db.Integer)
+    prix_achat = db.Column(db.Integer)
+    total = db.Column(db.Integer)
+
+
+def init_db():
+    """Cree les tables si elles n'existent pas encore, et ajoute 3 produits de depart si la base est vide."""
+    with app.app_context():
+        db.create_all()
+        if Produit.query.count() == 0:
+            db.session.add_all([
+                Produit(nom="RIZ", qte=50, prix_achat=2500, prix_vente=3000),
+                Produit(nom="SUCRE", qte=30, prix_achat=2000, prix_vente=2500),
+                Produit(nom="FARINE", qte=20, prix_achat=1600, prix_vente=2000),
+            ])
+            db.session.commit()
+
+
+init_db()
 
 
 def is_expired():
@@ -40,6 +102,30 @@ def get_cart():
 def cart_qte_reservee(nom):
     """Quantite d'un produit deja dans le panier en cours."""
     return sum(l['qte'] for l in get_cart() if l['nom'] == nom)
+
+
+def stock_dict():
+    """Relit la table Produit et la renvoie sous forme de dictionnaire (meme forme qu'avant, pour ne pas
+    changer les pages HTML)."""
+    return {p.nom: {"qte": p.qte, "prix_achat": p.prix_achat, "prix_vente": p.prix_vente}
+            for p in Produit.query.order_by(Produit.nom).all()}
+
+
+def stock_en_alerte():
+    """Liste des produits dont le stock est au ou sous le seuil d'alerte."""
+    produits = Produit.query.filter(Produit.qte <= SEUIL_ALERTE_STOCK).all()
+    return [{"nom": p.nom, "qte": p.qte} for p in produits]
+
+
+def vente_to_dict(v):
+    """Convertit une ligne de la table Vente (+ ses lignes) en dictionnaire, meme forme qu'avant."""
+    return {
+        "id": v.id, "timestamp": v.timestamp, "date": v.date,
+        "client": v.client, "tel": v.tel, "vendeur": v.vendeur,
+        "total": v.total, "marge": v.marge,
+        "lignes": [{"nom": l.nom, "qte": l.qte, "prix_vente": l.prix_vente, "prix_achat": l.prix_achat}
+                   for l in v.lignes],
+    }
 
 
 # ---------------------------------------------------------------- TEMPLATES
@@ -112,6 +198,8 @@ td{border:1px solid #e2e8f0;padding:8px;font-size:12px}
 .kpi .value{font-size:22px;font-weight:bold;color:#0f172a;margin-top:4px}
 .empty{color:#94a3b8;font-size:13px;padding:10px 0}
 .remove-link{color:#dc3545;text-decoration:none;font-weight:bold}
+.alert-stock{background:#fff3cd;border:2px solid #facc15;color:#7a5b00;padding:12px 14px;border-radius:10px;margin-bottom:15px;font-size:13px}
+.alert-stock b{display:block;margin-bottom:4px;color:#7a5b00}
 </style>
 <script>
 function calcTotal(){
@@ -126,9 +214,13 @@ function calcTotal(){
   <div class="sidebar-top"><h2 style="margin:0;font-size:16px">TANGA STOCK PRO</h2><div class="badge-role">{{role}}</div></div>
   <div class="menu">
     <a href="/dashboard" class="{% if view=='vente' %}active{% endif %}">🧾 Vente {% if cart %}<span class="cart-badge">{{cart|length}}</span>{% endif %}</a>
-    <a href="/dashboard?view=inventaire" class="{% if view=='inventaire' %}active{% endif %}">📦 Inventaire {% if role!='Gérant' %}🔒{% endif %}</a>
+    {% if role=='Gérant' %}
+    <a href="/dashboard?view=inventaire" class="{% if view=='inventaire' %}active{% endif %}">📦 Inventaire</a>
+    {% endif %}
     <a href="/dashboard?view=factures" class="{% if view=='factures' %}active{% endif %}">📄 Factures</a>
+    {% if role=='Gérant' %}
     <a href="/dashboard?view=stats" class="{% if view=='stats' %}active{% endif %}">📊 Tableau de bord</a>
+    {% endif %}
   </div>
   <a href="/dashboard?view=abo" class="btn-abo-visible">💳 Abo<br>10$ - 1 mois PRO<br><small>Visible - Expire {{b.expire}}</small></a>
   <div class="menu" style="margin-top:8px"><a href="/logout">🚪 Quitter</a></div>
@@ -139,6 +231,13 @@ function calcTotal(){
 </div>
 <div class="main">
 <div class="header">{{b.nom}} - Mode: {{role|lower}} - Prix fixe par le Gerant | Calcul automatique</div>
+
+{% if alertes %}
+<div class="alert-stock">
+  <b>⚠️ Alerte stock faible</b>
+  {% for a in alertes %}{{a.nom}} ({{a.qte}} restant{{'s' if a.qte>1 else ''}}){% if not loop.last %}, {% endif %}{% endfor %}
+</div>
+{% endif %}
 
 {% if view=='vente' or not view %}
 <div class="card">
@@ -248,7 +347,9 @@ function calcTotal(){
 {% if view=='stats' %}
 <div class="kpi-row">
   <div class="kpi"><div class="label">Ventes aujourd'hui</div><div class="value">{{stats.nb_ventes_jour}}</div></div>
-  <div class="kpi"><div class="label">Chiffre d'affaires du jour</div><div class="value">{{stats.ca_jour}} FC</div></div>
+  <div class="kpi"><div class="label">Chiffre d'affaires brut du jour</div><div class="value">{{stats.ca_jour}} FC</div></div>
+  <div class="kpi" style="border-left-color:#dc3545"><div class="label">Sorties d'argent (achats stock)</div><div class="value" style="color:#dc3545">-{{stats.sorties_jour}} FC</div></div>
+  <div class="kpi marge"><div class="label">Chiffre d'affaires net (apres achats)</div><div class="value">{{stats.ca_net_jour}} FC</div></div>
   <div class="kpi marge"><div class="label">Marge du jour</div><div class="value">{{stats.marge_jour}} FC</div></div>
   <div class="kpi top"><div class="label">Produit le plus vendu</div><div class="value" style="font-size:16px">{{stats.top_produit}}</div></div>
 </div>
@@ -361,15 +462,24 @@ def dashboard():
         return redirect('/')
 
     view = request.args.get('view', 'vente')
+    if view in ('inventaire', 'stats') and session.get('role') != 'Gérant':
+        view = 'vente'
     cart = get_cart()
     cart_total = sum(l['qte'] * l['prix_vente'] for l in cart)
+    alertes = stock_en_alerte()
+    stock = stock_dict()
+    ventes = [vente_to_dict(v) for v in Vente.query.order_by(Vente.timestamp).all()]
 
     stats = None
     if view == 'stats':
         today = date.today()
-        ventes_jour = [v for v in VENTES if v['timestamp'].date() == today]
+        ventes_jour = [v for v in ventes if v['timestamp'].date() == today]
         ca_jour = sum(v['total'] for v in ventes_jour)
         marge_jour = sum(v['marge'] for v in ventes_jour)
+
+        depenses_jour = Depense.query.all()
+        sorties_jour = sum(d.total for d in depenses_jour if d.timestamp.date() == today)
+        ca_net_jour = ca_jour - sorties_jour
 
         qte_par_produit = {}
         for v in ventes_jour:
@@ -383,6 +493,8 @@ def dashboard():
         stats = {
             "nb_ventes_jour": len(ventes_jour),
             "ca_jour": ca_jour,
+            "sorties_jour": sorties_jour,
+            "ca_net_jour": ca_net_jour,
             "marge_jour": marge_jour,
             "top_produit": top_produit,
             "labels": list(qte_par_produit.keys()),
@@ -390,8 +502,8 @@ def dashboard():
         }
 
     return render_template_string(
-        DASH_HTML, b=BOUTIQUE, role=session['role'], stock=STOCK, ventes=VENTES,
-        view=view, cart=cart, cart_total=cart_total, stats=stats
+        DASH_HTML, b=BOUTIQUE, role=session['role'], stock=stock, ventes=ventes,
+        view=view, cart=cart, cart_total=cart_total, stats=stats, alertes=alertes
     )
 
 
@@ -405,15 +517,16 @@ def add_to_cart():
     except ValueError:
         return redirect('/dashboard')
 
-    if nom in STOCK and qte > 0:
+    produit = Produit.query.get(nom)
+    if produit and qte > 0:
         deja_reserve = cart_qte_reservee(nom)
-        if STOCK[nom]['qte'] - deja_reserve >= qte:
+        if produit.qte - deja_reserve >= qte:
             cart = get_cart()
             cart.append({
                 "nom": nom,
                 "qte": qte,
-                "prix_vente": STOCK[nom]['prix_vente'],
-                "prix_achat": STOCK[nom]['prix_achat'],
+                "prix_vente": produit.prix_vente,
+                "prix_achat": produit.prix_achat,
             })
             session['cart'] = cart
     return redirect('/dashboard?view=vente')
@@ -438,39 +551,43 @@ def finalize_sale():
 
     # Verifie que le stock est toujours suffisant pour chaque ligne
     for l in cart:
-        if l['nom'] not in STOCK or STOCK[l['nom']]['qte'] < l['qte']:
+        produit = Produit.query.get(l['nom'])
+        if not produit or produit.qte < l['qte']:
             session['cart'] = []
             return redirect('/dashboard?view=vente')
 
     client = request.form.get('client', '').strip() or "Client"
     tel = request.form.get('tel', '').strip()
 
-    lignes = []
+    now = datetime.now()
+    vente = Vente(
+        id="FAC" + now.strftime('%y%m%d%H%M%S'),
+        timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
+        client=client, tel=tel, vendeur=session.get('role'),
+        total=0, marge=0,
+    )
+
     total = 0
     marge = 0
     for l in cart:
-        STOCK[l['nom']]['qte'] -= l['qte']
+        produit = Produit.query.get(l['nom'])
+        produit.qte -= l['qte']
         sous_total = l['qte'] * l['prix_vente']
         sous_marge = l['qte'] * (l['prix_vente'] - l['prix_achat'])
         total += sous_total
         marge += sous_marge
-        lignes.append({
-            "nom": l['nom'], "qte": l['qte'],
-            "prix_vente": l['prix_vente'], "prix_achat": l['prix_achat'],
-        })
+        vente.lignes.append(LigneVente(
+            nom=l['nom'], qte=l['qte'],
+            prix_vente=l['prix_vente'], prix_achat=l['prix_achat'],
+        ))
 
-    now = datetime.now()
-    vente = {
-        "id": "FAC" + now.strftime('%y%m%d%H%M%S'),
-        "timestamp": now,
-        "date": now.strftime('%d/%m/%Y %H:%M'),
-        "client": client, "tel": tel,
-        "vendeur": session.get('role'),
-        "lignes": lignes, "total": total, "marge": marge,
-    }
-    VENTES.append(vente)
+    vente.total = total
+    vente.marge = marge
+    db.session.add(vente)
+    db.session.commit()
+
     session['cart'] = []
-    return redirect('/facture/' + vente['id'])
+    return redirect('/facture/' + vente.id)
 
 
 @app.route('/add_pro', methods=['POST'])
@@ -485,12 +602,23 @@ def add_pro():
     except ValueError:
         return redirect('/dashboard?view=inventaire')
     if nom:
-        if nom in STOCK:
-            STOCK[nom]['qte'] += qte
-            STOCK[nom]['prix_achat'] = prix_achat
-            STOCK[nom]['prix_vente'] = prix_vente
+        produit = Produit.query.get(nom)
+        if produit:
+            produit.qte += qte
+            produit.prix_achat = prix_achat
+            produit.prix_vente = prix_vente
         else:
-            STOCK[nom] = {'qte': qte, 'prix_achat': prix_achat, 'prix_vente': prix_vente}
+            produit = Produit(nom=nom, qte=qte, prix_achat=prix_achat, prix_vente=prix_vente)
+            db.session.add(produit)
+        # Sortie d'argent : l'achat de ce stock est deduit du chiffre d'affaires du tableau de bord
+        if qte > 0:
+            now = datetime.now()
+            db.session.add(Depense(
+                id="DEP" + now.strftime('%y%m%d%H%M%S'),
+                timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
+                nom=nom, qte=qte, prix_achat=prix_achat, total=qte * prix_achat,
+            ))
+        db.session.commit()
     return redirect('/dashboard?view=inventaire')
 
 
@@ -498,16 +626,19 @@ def add_pro():
 def delete_pro(nom):
     if session.get('role') != 'Gérant':
         return redirect('/dashboard?view=inventaire')
-    STOCK.pop(nom, None)
+    produit = Produit.query.get(nom)
+    if produit:
+        db.session.delete(produit)
+        db.session.commit()
     return redirect('/dashboard?view=inventaire')
 
 
 @app.route('/facture/<fid>')
 def facture(fid):
-    v = next((x for x in VENTES if x['id'] == fid), None)
+    v = Vente.query.get(fid)
     if not v:
         return redirect('/dashboard?view=factures')
-    return render_template_string(FACTURE_HTML, b=BOUTIQUE, v=v)
+    return render_template_string(FACTURE_HTML, b=BOUTIQUE, v=vente_to_dict(v))
 
 
 @app.route('/logout')
