@@ -71,14 +71,16 @@ class Depense(db.Model):
     id = db.Column(db.String(30), primary_key=True)
     timestamp = db.Column(db.DateTime, default=datetime.now)
     date = db.Column(db.String(30))
-    nom = db.Column(db.String(80))
+    nom = db.Column(db.String(120))
     qte = db.Column(db.Integer)
     prix_achat = db.Column(db.Integer)
     total = db.Column(db.Integer)
+    categorie = db.Column(db.String(20), default='Stock')   # 'Stock' (achat produit) ou 'Autre' (transport, etc.)
 
 
 def init_db():
-    """Cree les tables si elles n'existent pas encore, et ajoute 3 produits de depart si la base est vide."""
+    """Cree les tables si elles n'existent pas encore, ajoute 3 produits de depart si la base est vide,
+    et ajoute la colonne 'categorie' si elle manque encore sur une base deja existante."""
     with app.app_context():
         db.create_all()
         if Produit.query.count() == 0:
@@ -88,6 +90,14 @@ def init_db():
                 Produit(nom="FARINE", qte=20, prix_achat=1600, prix_vente=2000),
             ])
             db.session.commit()
+        from sqlalchemy import inspect, text
+        inspecteur = inspect(db.engine)
+        if 'depense' in inspecteur.get_table_names():
+            colonnes = [c['name'] for c in inspecteur.get_columns('depense')]
+            if 'categorie' not in colonnes:
+                with db.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE depense ADD COLUMN categorie VARCHAR(20)"))
+                    conn.commit()
 
 
 init_db()
@@ -350,7 +360,7 @@ function calcTotal(){
 <div class="kpi-row">
   <div class="kpi"><div class="label">Ventes aujourd'hui</div><div class="value">{{stats.nb_ventes_jour}}</div></div>
   <div class="kpi"><div class="label">Chiffre d'affaires brut du jour</div><div class="value">{{stats.ca_jour}} FC</div></div>
-  <div class="kpi" style="border-left-color:#dc3545"><div class="label">Sorties d'argent (achats stock)</div><div class="value" style="color:#dc3545">-{{stats.sorties_jour}} FC</div></div>
+  <div class="kpi" style="border-left-color:#dc3545"><div class="label">Depenses du jour</div><div class="value" style="color:#dc3545">-{{stats.sorties_jour}} FC</div></div>
   <div class="kpi marge"><div class="label">Chiffre d'affaires net (apres achats)</div><div class="value">{{stats.ca_net_jour}} FC</div></div>
   <div class="kpi marge"><div class="label">Marge du jour</div><div class="value">{{stats.marge_jour}} FC</div></div>
   <div class="kpi top"><div class="label">Produit le plus vendu</div><div class="value" style="font-size:16px">{{stats.top_produit}}</div></div>
@@ -383,6 +393,40 @@ new Chart(document.getElementById('chartProduits'), {
 });
 {% endif %}
 </script>
+
+<div class="card">
+  <h3 style="margin:0 0 10px;color:#dc3545">Ajouter une depense (achat de stock, transport, frais divers...)</h3>
+  <div class="blue-box">Quand tu achetes du stock, note ici combien ca t'a coute - ca sera deduit immediatement du chiffre d'affaires net ci-dessus.</div>
+  <form method="POST" action="/add_depense">
+    <div class="input-row">
+      <div class="input-group" style="flex:2">
+        <label>Description</label>
+        <input name="description" placeholder="Ex: Achat stock riz / Transport vendeurs" required>
+      </div>
+      <div class="input-group">
+        <label>Montant (FC)</label>
+        <input type="number" name="montant" min="1" required>
+      </div>
+    </div>
+    <button class="btn-vendre" type="submit" style="background:#dc3545">- Enregistrer la depense</button>
+  </form>
+
+  <h4 style="margin:18px 0 6px;color:#0b3d91">Depenses d'aujourd'hui</h4>
+  {% if stats.depenses %}
+  <table>
+    <tr><th>Heure</th><th>Description</th><th>Montant</th></tr>
+    {% for d in stats.depenses %}
+    <tr>
+      <td>{{d.date}}</td>
+      <td>{{d.nom}}</td>
+      <td style="color:#dc3545;font-weight:bold">-{{d.total}} FC</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">Aucune depense enregistree aujourd'hui.</div>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if view=='abo' %}
@@ -480,7 +524,8 @@ def dashboard():
         marge_jour = sum(v['marge'] for v in ventes_jour)
 
         depenses_jour = Depense.query.all()
-        sorties_jour = sum(d.total for d in depenses_jour if d.timestamp.date() == today)
+        depenses_jour_du_jour = [d for d in depenses_jour if d.timestamp.date() == today]
+        sorties_jour = sum(d.total for d in depenses_jour_du_jour)
         ca_net_jour = ca_jour - sorties_jour
 
         qte_par_produit = {}
@@ -501,6 +546,11 @@ def dashboard():
             "top_produit": top_produit,
             "labels": list(qte_par_produit.keys()),
             "data": list(qte_par_produit.values()),
+            "depenses": sorted(
+                [{"date": d.date, "nom": d.nom, "total": d.total, "categorie": d.categorie or 'Stock'}
+                 for d in depenses_jour_du_jour],
+                key=lambda d: d['date'], reverse=True
+            ),
         }
 
     return render_template_string(
@@ -612,16 +662,30 @@ def add_pro():
         else:
             produit = Produit(nom=nom, qte=qte, prix_achat=prix_achat, prix_vente=prix_vente)
             db.session.add(produit)
-        # Sortie d'argent : l'achat de ce stock est deduit du chiffre d'affaires du tableau de bord
-        if qte > 0:
-            now = datetime.now()
-            db.session.add(Depense(
-                id="DEP" + now.strftime('%y%m%d%H%M%S'),
-                timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
-                nom=nom, qte=qte, prix_achat=prix_achat, total=qte * prix_achat,
-            ))
         db.session.commit()
     return redirect('/dashboard?view=inventaire')
+
+
+@app.route('/add_depense', methods=['POST'])
+def add_depense():
+    """Depense libre du Gerant (transport, frais divers...) - deduite directement du chiffre d'affaires."""
+    if session.get('role') != 'Gérant':
+        return redirect('/dashboard?view=stats')
+    description = request.form.get('description', '').strip()
+    try:
+        montant = int(float(request.form.get('montant', 0)))
+    except ValueError:
+        return redirect('/dashboard?view=stats')
+    if description and montant > 0:
+        now = datetime.now()
+        db.session.add(Depense(
+            id="DEP" + now.strftime('%y%m%d%H%M%S'),
+            timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
+            nom=description, qte=1, prix_achat=montant, total=montant,
+            categorie='Autre',
+        ))
+        db.session.commit()
+    return redirect('/dashboard?view=stats')
 
 
 @app.route('/delete_pro/<nom>')
