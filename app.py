@@ -230,6 +230,7 @@ function calcTotal(){
     <a href="/dashboard?view=inventaire" class="{% if view=='inventaire' %}active{% endif %}">📦 Inventaire</a>
     {% endif %}
     <a href="/dashboard?view=factures" class="{% if view=='factures' %}active{% endif %}">📄 Factures</a>
+    <a href="/dashboard?view=depenses" class="{% if view=='depenses' %}active{% endif %}">💸 Depenses</a>
     {% if role=='Gérant' %}
     <a href="/dashboard?view=stats" class="{% if view=='stats' %}active{% endif %}">📊 Tableau de bord</a>
     {% endif %}
@@ -393,10 +394,12 @@ new Chart(document.getElementById('chartProduits'), {
 });
 {% endif %}
 </script>
+{% endif %}
 
+{% if view=='depenses' %}
 <div class="card">
   <h3 style="margin:0 0 10px;color:#dc3545">Ajouter une depense (achat de stock, transport, frais divers...)</h3>
-  <div class="blue-box">Quand tu achetes du stock, note ici combien ca t'a coute - ca sera deduit immediatement du chiffre d'affaires net ci-dessus.</div>
+  <div class="blue-box">Quand tu achetes du stock, note ici combien ca t'a coute - ca sera deduit du chiffre d'affaires net du Tableau de bord.</div>
   <form method="POST" action="/add_depense">
     <div class="input-row">
       <div class="input-group" style="flex:2">
@@ -411,20 +414,26 @@ new Chart(document.getElementById('chartProduits'), {
     <button class="btn-vendre" type="submit" style="background:#dc3545">- Enregistrer la depense</button>
   </form>
 
-  <h4 style="margin:18px 0 6px;color:#0b3d91">Depenses d'aujourd'hui</h4>
-  {% if stats.depenses %}
+  <h4 style="margin:18px 0 6px;color:#0b3d91">Historique des depenses</h4>
+  {% if depenses %}
   <table>
-    <tr><th>Heure</th><th>Description</th><th>Montant</th></tr>
-    {% for d in stats.depenses %}
+    <tr><th>Date</th><th>Description</th><th>Montant</th>{% if role=='Gérant' %}<th>Actions</th>{% endif %}</tr>
+    {% for d in depenses %}
     <tr>
       <td>{{d.date}}</td>
       <td>{{d.nom}}</td>
       <td style="color:#dc3545;font-weight:bold">-{{d.total}} FC</td>
+      {% if role=='Gérant' %}
+      <td>
+        <a href="/edit_depense/{{d.id}}" style="color:#0b3d91;font-weight:bold;text-decoration:none;margin-right:8px">Modifier</a>
+        <a class="remove-link" href="/delete_depense/{{d.id}}" onclick="return confirm('Supprimer cette depense ?')">Supprimer</a>
+      </td>
+      {% endif %}
     </tr>
     {% endfor %}
   </table>
   {% else %}
-  <div class="empty">Aucune depense enregistree aujourd'hui.</div>
+  <div class="empty">Aucune depense enregistree pour le moment.</div>
   {% endif %}
 </div>
 {% endif %}
@@ -479,6 +488,28 @@ td{border:1px solid #ddd;padding:10px}
 <a href="/dashboard" class="no-print">Retour</a></center>
 </body></html>'''
 
+EDIT_DEPENSE_HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Modifier la depense</title>
+<style>
+body{background:#eef3ff;font-family:Arial;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:15px}
+.card{background:#fff;padding:28px;border-radius:16px;width:95%;max-width:420px;box-shadow:0 8px 25px rgba(0,0,0,.12)}
+h2{color:{{b.couleur}};margin-top:0}
+label{font-size:12px;color:#64748b;display:block;margin-top:10px}
+input{width:100%;padding:13px;margin-top:4px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;font-size:15px}
+button{padding:13px 22px;background:{{b.couleur}};color:#fff;border:none;border-radius:10px;font-weight:bold;margin-top:16px}
+a{display:inline-block;margin-top:12px;margin-left:10px;color:#64748b;text-decoration:none}
+</style></head><body><div class="card">
+<h2>Modifier la depense</h2>
+<form method="POST">
+  <label>Description</label>
+  <input name="description" value="{{d.nom}}" required>
+  <label>Montant (FC)</label>
+  <input type="number" name="montant" value="{{d.total}}" min="1" required>
+  <button type="submit">Enregistrer</button>
+  <a href="/dashboard?view=depenses">Annuler</a>
+</form>
+</div></body></html>'''
+
 
 # ---------------------------------------------------------------- ROUTES
 
@@ -523,8 +554,7 @@ def dashboard():
         ca_jour = sum(v['total'] for v in ventes_jour)
         marge_jour = sum(v['marge'] for v in ventes_jour)
 
-        depenses_jour = Depense.query.all()
-        depenses_jour_du_jour = [d for d in depenses_jour if d.timestamp.date() == today]
+        depenses_jour_du_jour = [d for d in Depense.query.all() if d.timestamp.date() == today]
         sorties_jour = sum(d.total for d in depenses_jour_du_jour)
         ca_net_jour = ca_jour - sorties_jour
 
@@ -546,16 +576,16 @@ def dashboard():
             "top_produit": top_produit,
             "labels": list(qte_par_produit.keys()),
             "data": list(qte_par_produit.values()),
-            "depenses": sorted(
-                [{"date": d.date, "nom": d.nom, "total": d.total, "categorie": d.categorie or 'Stock'}
-                 for d in depenses_jour_du_jour],
-                key=lambda d: d['date'], reverse=True
-            ),
         }
+
+    depenses = None
+    if view == 'depenses':
+        depenses = [{"id": d.id, "date": d.date, "nom": d.nom, "total": d.total}
+                    for d in Depense.query.order_by(Depense.timestamp.desc()).all()]
 
     return render_template_string(
         DASH_HTML, b=BOUTIQUE, role=session['role'], stock=stock, ventes=ventes,
-        view=view, cart=cart, cart_total=cart_total, stats=stats, alertes=alertes
+        view=view, cart=cart, cart_total=cart_total, stats=stats, alertes=alertes, depenses=depenses
     )
 
 
@@ -668,14 +698,14 @@ def add_pro():
 
 @app.route('/add_depense', methods=['POST'])
 def add_depense():
-    """Depense libre du Gerant (transport, frais divers...) - deduite directement du chiffre d'affaires."""
-    if session.get('role') != 'Gérant':
-        return redirect('/dashboard?view=stats')
+    """Depense libre (achat de stock, transport, frais divers...) - deduite directement du chiffre d'affaires."""
+    if 'role' not in session:
+        return redirect('/')
     description = request.form.get('description', '').strip()
     try:
         montant = int(float(request.form.get('montant', 0)))
     except ValueError:
-        return redirect('/dashboard?view=stats')
+        return redirect('/dashboard?view=depenses')
     if description and montant > 0:
         now = datetime.now()
         db.session.add(Depense(
@@ -685,7 +715,40 @@ def add_depense():
             categorie='Autre',
         ))
         db.session.commit()
-    return redirect('/dashboard?view=stats')
+    return redirect('/dashboard?view=depenses')
+
+
+@app.route('/edit_depense/<did>', methods=['GET', 'POST'])
+def edit_depense(did):
+    if session.get('role') != 'Gérant':
+        return redirect('/dashboard?view=depenses')
+    d = Depense.query.get(did)
+    if not d:
+        return redirect('/dashboard?view=depenses')
+    if request.method == 'POST':
+        description = request.form.get('description', '').strip()
+        try:
+            montant = int(float(request.form.get('montant', 0)))
+        except ValueError:
+            return redirect('/dashboard?view=depenses')
+        if description and montant > 0:
+            d.nom = description
+            d.prix_achat = montant
+            d.total = montant
+            db.session.commit()
+        return redirect('/dashboard?view=depenses')
+    return render_template_string(EDIT_DEPENSE_HTML, b=BOUTIQUE, d=d)
+
+
+@app.route('/delete_depense/<did>')
+def delete_depense(did):
+    if session.get('role') != 'Gérant':
+        return redirect('/dashboard?view=depenses')
+    d = Depense.query.get(did)
+    if d:
+        db.session.delete(d)
+        db.session.commit()
+    return redirect('/dashboard?view=depenses')
 
 
 @app.route('/delete_pro/<nom>')
