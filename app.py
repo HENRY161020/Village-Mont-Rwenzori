@@ -161,7 +161,7 @@ EXPIRE_HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8">
 .num{font-size:19px;font-weight:bold;color:#0b3d91}
 .pay-box{background:#fff3e0;border:2px dashed #ff6a00;padding:14px;border-radius:10px;margin:15px 0;text-align:left}</style>
 </head><body><div class="card"><h2 style="color:#dc3545">ABONNEMENT EXPIRE</h2><p>{{b.nom}} - expire le {{b.expire}}</p>
-<div class="pay-box"><b>Pour reactiver PRO 1 MOIS (10$):</b><br><br>
+<div class="pay-box"><b>Pour reactiver PRO 1 MOIS (20$):</b><br><br>
 M-Pesa: <span class="num">{{b.mpesa}}</span><br>Orange Money: <span class="num">{{b.orange}}</span></div>
 <p style="font-size:12px;color:#666">Apres paiement, envoyez la capture d'ecran par WhatsApp pour reactivation.</p></div></body></html>'''
 
@@ -248,7 +248,7 @@ function calcTotal(){
     <a href="/dashboard?view=historique" class="{% if view=='historique' %}active{% endif %}">📅 Historique</a>
     {% endif %}
   </div>
-  <a href="/dashboard?view=abo" class="btn-abo-visible">💳 Abo<br>10$ - 1 mois PRO<br><small>Visible - Expire {{b.expire}}</small></a>
+  <a href="/dashboard?view=abo" class="btn-abo-visible">💳 Abo<br>20$ - 1 mois PRO<br><small>Visible - Expire {{b.expire}}</small></a>
   <div class="menu" style="margin-top:8px"><a href="/logout">🚪 Quitter</a></div>
   <div style="margin-top:auto;padding:12px;font-size:10px;color:#94c0ff;background:#0a347a">
     M-Pesa<br><b style="font-size:12px;color:#fff">{{b.mpesa}}</b><br>
@@ -527,7 +527,7 @@ new Chart(document.getElementById('chartProduits'), {
   <h3 style="color:#ff6a00">Abonnement PRO 1 mois - {{b.nom}}</h3>
   <div class="orange-box">
     <b>Statut: ACTIF jusqu'au {{b.expire}}</b><br><br>
-    <b>Pour renouveler PRO 1 MOIS (10$):</b><br><br>
+    <b>Pour renouveler PRO 1 MOIS (20$):</b><br><br>
     M-Pesa: <span class="num">{{b.mpesa}}</span> - HENRY KASEREKA<br>
     Orange Money: <span class="num">{{b.orange}}</span> - HENRY KASEREKA<br><br>
     Apres paiement envoyez la capture WhatsApp<br>
