@@ -55,6 +55,8 @@ class Vente(db.Model):
     vendeur = db.Column(db.String(30))
     total = db.Column(db.Integer, default=0)
     marge = db.Column(db.Integer, default=0)
+    mode_paiement = db.Column(db.String(20), default='cash')      # 'cash' ou 'dette'
+    statut_paiement = db.Column(db.String(20), default='paye')    # 'paye' ou 'non_paye'
     lignes = db.relationship('LigneVente', backref='vente', cascade='all, delete-orphan')
 
 
@@ -80,7 +82,7 @@ class Depense(db.Model):
 
 def init_db():
     """Cree les tables si elles n'existent pas encore, ajoute 3 produits de depart si la base est vide,
-    et ajoute la colonne 'categorie' si elle manque encore sur une base deja existante."""
+    et ajoute les nouvelles colonnes si elles manquent encore sur une base deja existante."""
     with app.app_context():
         db.create_all()
         if Produit.query.count() == 0:
@@ -98,6 +100,14 @@ def init_db():
                 with db.engine.connect() as conn:
                     conn.execute(text("ALTER TABLE depense ADD COLUMN categorie VARCHAR(20)"))
                     conn.commit()
+        if 'vente' in inspecteur.get_table_names():
+            colonnes = [c['name'] for c in inspecteur.get_columns('vente')]
+            with db.engine.connect() as conn:
+                if 'mode_paiement' not in colonnes:
+                    conn.execute(text("ALTER TABLE vente ADD COLUMN mode_paiement VARCHAR(20) DEFAULT 'cash'"))
+                if 'statut_paiement' not in colonnes:
+                    conn.execute(text("ALTER TABLE vente ADD COLUMN statut_paiement VARCHAR(20) DEFAULT 'paye'"))
+                conn.commit()
 
 
 init_db()
@@ -135,6 +145,8 @@ def vente_to_dict(v):
         "id": v.id, "timestamp": v.timestamp, "date": v.date,
         "client": v.client, "tel": v.tel, "vendeur": v.vendeur,
         "total": v.total, "marge": v.marge,
+        "mode_paiement": v.mode_paiement or 'cash',
+        "statut_paiement": v.statut_paiement or 'paye',
         "lignes": [{"nom": l.nom, "qte": l.qte, "prix_vente": l.prix_vente, "prix_achat": l.prix_achat}
                    for l in v.lignes],
     }
@@ -233,6 +245,7 @@ function calcTotal(){
     <a href="/dashboard?view=depenses" class="{% if view=='depenses' %}active{% endif %}">💸 Depenses</a>
     {% if role=='Gérant' %}
     <a href="/dashboard?view=stats" class="{% if view=='stats' %}active{% endif %}">📊 Tableau de bord</a>
+    <a href="/dashboard?view=historique" class="{% if view=='historique' %}active{% endif %}">📅 Historique</a>
     {% endif %}
   </div>
   <a href="/dashboard?view=abo" class="btn-abo-visible">💳 Abo<br>10$ - 1 mois PRO<br><small>Visible - Expire {{b.expire}}</small></a>
@@ -300,6 +313,17 @@ function calcTotal(){
       <div class="input-group" style="flex:2"><label>Client</label><input name="client" value="Client" required></div>
       <div class="input-group"><label>Telephone</label><input name="tel" placeholder="099..."></div>
     </div>
+    <div class="input-group" style="margin-top:10px">
+      <label>Paiement</label>
+      <div style="display:flex;gap:16px;margin-top:6px">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:normal;font-size:14px">
+          <input type="radio" name="mode_paiement" value="cash" checked style="width:auto"> 💵 Cash (paye maintenant)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-weight:normal;font-size:14px">
+          <input type="radio" name="mode_paiement" value="dette" style="width:auto"> 📒 Dette (paiera plus tard)
+        </label>
+      </div>
+    </div>
     <button class="btn-finaliser" type="submit">✅ Finaliser la facture ({{cart_total}} FC)</button>
   </form>
   {% else %}
@@ -343,13 +367,21 @@ function calcTotal(){
 <div class="card">
   <h3>Factures</h3>
   <table>
-    <tr><th>No</th><th>Date</th><th>Client</th><th>Articles</th><th>Total</th><th>Marge</th><th>Voir</th></tr>
+    <tr><th>No</th><th>Date</th><th>Client</th><th>Articles</th><th>Total</th><th>Marge</th><th>Statut</th><th>Voir</th></tr>
     {% for v in ventes[::-1] %}
     <tr>
       <td>{{v.id}}</td><td>{{v.date}}</td><td>{{v.client}}</td>
       <td>{{v.lignes|length}} article(s)</td>
       <td style="font-weight:bold;color:#0b3d91">{{v.total}} FC</td>
       <td style="color:#16a34a;font-weight:bold">{{v.marge}} FC</td>
+      <td>
+        {% if v.statut_paiement=='paye' %}
+        <span style="background:#d4edda;color:#155724;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:bold">🟢 Paye</span>
+        {% else %}
+        <span style="background:#f8d7da;color:#721c24;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:bold">🔴 Dette</span>
+        {% if role=='Gérant' %}<br><a href="/marquer_paye/{{v.id}}" style="font-size:11px;color:#0b3d91;font-weight:bold" onclick="return confirm('Marquer cette facture comme payee ?')">Marquer paye</a>{% endif %}
+        {% endif %}
+      </td>
       <td><a href="/facture/{{v.id}}" target="_blank">Voir</a></td>
     </tr>
     {% endfor %}
@@ -438,6 +470,58 @@ new Chart(document.getElementById('chartProduits'), {
 </div>
 {% endif %}
 
+{% if view=='historique' %}
+<div class="card">
+  <h3 style="margin:0 0 10px;color:#0b3d91">Historique - {{noms_mois[mois_selection-1]}} {{annee_selection}}</h3>
+  <form method="GET" action="/dashboard" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+    <input type="hidden" name="view" value="historique">
+    <div class="input-group">
+      <label>Mois</label>
+      <select name="mois">
+        {% for i in range(1,13) %}
+        <option value="{{i}}" {% if i==mois_selection %}selected{% endif %}>{{noms_mois[i-1]}}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="input-group">
+      <label>Annee</label>
+      <select name="annee">
+        {% for a in annees_disponibles %}
+        <option value="{{a}}" {% if a==annee_selection %}selected{% endif %}>{{a}}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn-vendre" type="submit">Afficher</button>
+  </form>
+  <div class="blue-box">Utile en fin de mois (ou d'annee en annee) pour voir combien tu as vendu chaque jour.</div>
+  {% if historique %}
+  <table>
+    <tr><th>Date</th><th>Ventes</th><th>CA brut</th><th>Depenses</th><th>CA net</th><th>Marge</th></tr>
+    {% for j in historique %}
+    <tr>
+      <td>{{j.date}}</td>
+      <td>{{j.nb_ventes}}</td>
+      <td style="color:#0b3d91;font-weight:bold">{{j.ca}} FC</td>
+      <td style="color:#dc3545">-{{j.depenses}} FC</td>
+      <td style="font-weight:bold">{{j.ca_net}} FC</td>
+      <td style="color:#16a34a;font-weight:bold">{{j.marge}} FC</td>
+    </tr>
+    {% endfor %}
+    <tr style="background:#eef3ff;font-weight:bold">
+      <td>TOTAL DU MOIS</td>
+      <td>{{totaux_mois.nb_ventes}}</td>
+      <td style="color:#0b3d91">{{totaux_mois.ca}} FC</td>
+      <td style="color:#dc3545">-{{totaux_mois.depenses}} FC</td>
+      <td>{{totaux_mois.ca_net}} FC</td>
+      <td style="color:#16a34a">{{totaux_mois.marge}} FC</td>
+    </tr>
+  </table>
+  {% else %}
+  <div class="empty">Aucune vente ni depense enregistree ce mois-ci.</div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if view=='abo' %}
 <div class="card">
   <h3 style="color:#ff6a00">Abonnement PRO 1 mois - {{b.nom}}</h3>
@@ -473,6 +557,11 @@ td{border:1px solid #ddd;padding:10px}
   <div style="text-align:right"><b>FACTURE</b><br>{{v.id}}<br>{{v.date}}<br>Vendeur: {{v.vendeur}}</div>
 </div>
 <p><b>Client:</b> {{v.client}}{% if v.tel %} - {{v.tel}}{% endif %}</p>
+{% if v.statut_paiement=='non_paye' %}
+<p style="background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;font-weight:bold">🔴 DETTE - Facture non payee</p>
+{% else %}
+<p style="background:#d4edda;color:#155724;padding:10px;border-radius:8px;font-weight:bold">🟢 Payee (Cash)</p>
+{% endif %}
 <table>
   <tr><th>Description</th><th>Qte</th><th>PU</th><th>Total</th></tr>
   {% for l in v.lignes %}
@@ -539,7 +628,7 @@ def dashboard():
         return redirect('/')
 
     view = request.args.get('view', 'vente')
-    if view in ('inventaire', 'stats') and session.get('role') != 'Gérant':
+    if view in ('inventaire', 'stats', 'historique') and session.get('role') != 'Gérant':
         view = 'vente'
     cart = get_cart()
     cart_total = sum(l['qte'] * l['prix_vente'] for l in cart)
@@ -583,9 +672,70 @@ def dashboard():
         depenses = [{"id": d.id, "date": d.date, "nom": d.nom, "total": d.total}
                     for d in Depense.query.order_by(Depense.timestamp.desc()).all()]
 
+    historique = None
+    totaux_mois = None
+    mois_selection = None
+    annee_selection = None
+    annees_disponibles = None
+    noms_mois = ["Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin",
+                 "Juillet", "Aout", "Septembre", "Octobre", "Novembre", "Decembre"]
+    if view == 'historique':
+        now_dt = datetime.now()
+        try:
+            mois_selection = int(request.args.get('mois', now_dt.month))
+            annee_selection = int(request.args.get('annee', now_dt.year))
+        except ValueError:
+            mois_selection, annee_selection = now_dt.month, now_dt.year
+
+        toutes_depenses = Depense.query.all()
+        annees_disponibles = sorted(set(
+            [v['timestamp'].year for v in ventes] +
+            [d.timestamp.year for d in toutes_depenses] +
+            [now_dt.year]
+        ), reverse=True)
+
+        jours = {}
+        for v in ventes:
+            if v['timestamp'].year == annee_selection and v['timestamp'].month == mois_selection:
+                jour = v['timestamp'].date()
+                if jour not in jours:
+                    jours[jour] = {"nb_ventes": 0, "ca": 0, "marge": 0, "depenses": 0}
+                jours[jour]["nb_ventes"] += 1
+                jours[jour]["ca"] += v['total']
+                jours[jour]["marge"] += v['marge']
+
+        for d in toutes_depenses:
+            if d.timestamp.year == annee_selection and d.timestamp.month == mois_selection:
+                jour = d.timestamp.date()
+                if jour not in jours:
+                    jours[jour] = {"nb_ventes": 0, "ca": 0, "marge": 0, "depenses": 0}
+                jours[jour]["depenses"] += d.total
+
+        historique = []
+        for jour in sorted(jours.keys(), reverse=True):
+            info = jours[jour]
+            historique.append({
+                "date": jour.strftime('%d/%m/%Y'),
+                "nb_ventes": info["nb_ventes"],
+                "ca": info["ca"],
+                "depenses": info["depenses"],
+                "ca_net": info["ca"] - info["depenses"],
+                "marge": info["marge"],
+            })
+
+        totaux_mois = {
+            "nb_ventes": sum(j["nb_ventes"] for j in historique),
+            "ca": sum(j["ca"] for j in historique),
+            "depenses": sum(j["depenses"] for j in historique),
+            "ca_net": sum(j["ca_net"] for j in historique),
+            "marge": sum(j["marge"] for j in historique),
+        }
+
     return render_template_string(
         DASH_HTML, b=BOUTIQUE, role=session['role'], stock=stock, ventes=ventes,
-        view=view, cart=cart, cart_total=cart_total, stats=stats, alertes=alertes, depenses=depenses
+        view=view, cart=cart, cart_total=cart_total, stats=stats, alertes=alertes, depenses=depenses,
+        historique=historique, totaux_mois=totaux_mois, mois_selection=mois_selection,
+        annee_selection=annee_selection, annees_disponibles=annees_disponibles, noms_mois=noms_mois
     )
 
 
@@ -640,13 +790,17 @@ def finalize_sale():
 
     client = request.form.get('client', '').strip() or "Client"
     tel = request.form.get('tel', '').strip()
+    mode_paiement = request.form.get('mode_paiement', 'cash')
+    if mode_paiement not in ('cash', 'dette'):
+        mode_paiement = 'cash'
+    statut_paiement = 'paye' if mode_paiement == 'cash' else 'non_paye'
 
     now = datetime.now()
     vente = Vente(
         id="FAC" + now.strftime('%y%m%d%H%M%S'),
         timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
         client=client, tel=tel, vendeur=session.get('role'),
-        total=0, marge=0,
+        total=0, marge=0, mode_paiement=mode_paiement, statut_paiement=statut_paiement,
     )
 
     total = 0
@@ -760,6 +914,17 @@ def delete_pro(nom):
         db.session.delete(produit)
         db.session.commit()
     return redirect('/dashboard?view=inventaire')
+
+
+@app.route('/marquer_paye/<fid>')
+def marquer_paye(fid):
+    if session.get('role') != 'Gérant':
+        return redirect('/dashboard?view=factures')
+    v = Vente.query.get(fid)
+    if v:
+        v.statut_paiement = 'paye'
+        db.session.commit()
+    return redirect('/dashboard?view=factures')
 
 
 @app.route('/facture/<fid>')
