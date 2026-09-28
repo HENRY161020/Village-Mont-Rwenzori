@@ -57,6 +57,9 @@ class Vente(db.Model):
     marge = db.Column(db.Integer, default=0)
     mode_paiement = db.Column(db.String(20), default='cash')      # 'cash' ou 'dette'
     statut_paiement = db.Column(db.String(20), default='paye')    # 'paye' ou 'non_paye'
+    serveur = db.Column(db.String(60))                            # nom du serveur qui a servi
+    date_paiement = db.Column(db.String(30))                      # quand la dette a ete reglee
+    paye_par = db.Column(db.String(30))                           # qui a consigne le paiement (Gerant/Vendeur)
     lignes = db.relationship('LigneVente', backref='vente', cascade='all, delete-orphan')
 
 
@@ -78,6 +81,17 @@ class Depense(db.Model):
     prix_achat = db.Column(db.Integer)
     total = db.Column(db.Integer)
     categorie = db.Column(db.String(20), default='Stock')   # 'Stock' (achat produit) ou 'Autre' (transport, etc.)
+
+
+class Casse(db.Model):
+    """Bouteilles / produits casses ou endommages (mwazi) : deduits du stock."""
+    id = db.Column(db.String(30), primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
+    date = db.Column(db.String(30))
+    produit = db.Column(db.String(80))
+    qte = db.Column(db.Integer)
+    motif = db.Column(db.String(120))
+    cout = db.Column(db.Integer, default=0)      # perte = qte x prix d'achat
 
 
 def init_db():
@@ -107,6 +121,12 @@ def init_db():
                     conn.execute(text("ALTER TABLE vente ADD COLUMN mode_paiement VARCHAR(20) DEFAULT 'cash'"))
                 if 'statut_paiement' not in colonnes:
                     conn.execute(text("ALTER TABLE vente ADD COLUMN statut_paiement VARCHAR(20) DEFAULT 'paye'"))
+                if 'serveur' not in colonnes:
+                    conn.execute(text("ALTER TABLE vente ADD COLUMN serveur VARCHAR(60)"))
+                if 'date_paiement' not in colonnes:
+                    conn.execute(text("ALTER TABLE vente ADD COLUMN date_paiement VARCHAR(30)"))
+                if 'paye_par' not in colonnes:
+                    conn.execute(text("ALTER TABLE vente ADD COLUMN paye_par VARCHAR(30)"))
                 conn.commit()
 
 
@@ -139,6 +159,18 @@ def stock_en_alerte():
     return [{"nom": p.nom, "qte": p.qte} for p in produits]
 
 
+def detail_produits(liste_ventes):
+    """Regroupe les lignes d'une liste de ventes par produit : quantite vendue, chiffre d'affaires, marge."""
+    tot = {}
+    for v in liste_ventes:
+        for l in v['lignes']:
+            t = tot.setdefault(l['nom'], {"nom": l['nom'], "qte": 0, "ca": 0, "marge": 0})
+            t["qte"] += l['qte']
+            t["ca"] += l['qte'] * l['prix_vente']
+            t["marge"] += l['qte'] * (l['prix_vente'] - l['prix_achat'])
+    return sorted(tot.values(), key=lambda t: t["qte"], reverse=True)
+
+
 def vente_to_dict(v):
     """Convertit une ligne de la table Vente (+ ses lignes) en dictionnaire, meme forme qu'avant."""
     return {
@@ -147,6 +179,9 @@ def vente_to_dict(v):
         "total": v.total, "marge": v.marge,
         "mode_paiement": v.mode_paiement or 'cash',
         "statut_paiement": v.statut_paiement or 'paye',
+        "serveur": v.serveur or '',
+        "date_paiement": v.date_paiement or '',
+        "paye_par": v.paye_par or '',
         "lignes": [{"nom": l.nom, "qte": l.qte, "prix_vente": l.prix_vente, "prix_achat": l.prix_achat}
                    for l in v.lignes],
     }
@@ -243,9 +278,11 @@ function calcTotal(){
     {% endif %}
     <a href="/dashboard?view=factures" class="{% if view=='factures' %}active{% endif %}">📄 Factures</a>
     <a href="/dashboard?view=depenses" class="{% if view=='depenses' %}active{% endif %}">💸 Depenses</a>
+    <a href="/dashboard?view=casse" class="{% if view=='casse' %}active{% endif %}">🍾 Casse (Mwazi)</a>
     {% if role=='Gérant' %}
     <a href="/dashboard?view=stats" class="{% if view=='stats' %}active{% endif %}">📊 Tableau de bord</a>
     <a href="/dashboard?view=historique" class="{% if view=='historique' %}active{% endif %}">📅 Historique</a>
+    <a href="/dashboard?view=serveurs" class="{% if view=='serveurs' %}active{% endif %}">👤 Serveurs</a>
     {% endif %}
   </div>
   <a href="/dashboard?view=abo" class="btn-abo-visible">💳 Abo<br>20$ - 1 mois PRO<br><small>Visible - Expire {{b.expire}}</small></a>
@@ -312,6 +349,8 @@ function calcTotal(){
     <div class="input-row">
       <div class="input-group" style="flex:2"><label>Client</label><input name="client" value="Client" required></div>
       <div class="input-group"><label>Telephone</label><input name="tel" placeholder="099..."></div>
+      <div class="input-group"><label>Serveur</label><input name="serveur" list="liste-serveurs" placeholder="Nom du serveur" required autocomplete="off"></div>
+      <datalist id="liste-serveurs">{% for s in serveurs_connus %}<option value="{{s}}">{% endfor %}</datalist>
     </div>
     <div class="input-group" style="margin-top:10px">
       <label>Paiement</label>
@@ -367,19 +406,19 @@ function calcTotal(){
 <div class="card">
   <h3>Factures</h3>
   <table>
-    <tr><th>No</th><th>Date</th><th>Client</th><th>Articles</th><th>Total</th><th>Marge</th><th>Statut</th><th>Voir</th></tr>
+    <tr><th>No</th><th>Date</th><th>Client</th><th>Serveur</th><th>Articles</th><th>Total</th><th>Marge</th><th>Statut</th><th>Voir</th></tr>
     {% for v in ventes[::-1] %}
     <tr>
-      <td>{{v.id}}</td><td>{{v.date}}</td><td>{{v.client}}</td>
+      <td>{{v.id}}</td><td>{{v.date}}</td><td>{{v.client}}</td><td>{{v.serveur or '-'}}</td>
       <td>{{v.lignes|length}} article(s)</td>
       <td style="font-weight:bold;color:#0b3d91">{{v.total}} FC</td>
       <td style="color:#16a34a;font-weight:bold">{{v.marge}} FC</td>
       <td>
         {% if v.statut_paiement=='paye' %}
-        <span style="background:#d4edda;color:#155724;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:bold">🟢 Paye</span>
+        <span style="background:#d4edda;color:#155724;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:bold">🟢 Paye</span>{% if v.mode_paiement=='dette' and v.date_paiement %}<br><small style="color:#64748b">Regle le {{v.date_paiement}} ({{v.paye_par}})</small>{% endif %}
         {% else %}
         <span style="background:#f8d7da;color:#721c24;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:bold">🔴 Dette</span>
-        {% if role=='Gérant' %}<br><a href="/marquer_paye/{{v.id}}" style="font-size:11px;color:#0b3d91;font-weight:bold" onclick="return confirm('Marquer cette facture comme payee ?')">Marquer paye</a>{% endif %}
+        <br><a href="/marquer_paye/{{v.id}}" style="font-size:11px;color:#0b3d91;font-weight:bold" onclick="return confirm('Marquer cette facture comme payee ?')">Marquer paye</a>
         {% endif %}
       </td>
       <td><a href="/facture/{{v.id}}" target="_blank">Voir</a></td>
@@ -426,6 +465,86 @@ new Chart(document.getElementById('chartProduits'), {
 });
 {% endif %}
 </script>
+{% endif %}
+
+{% if view=='stats' %}
+<div class="card">
+  <h3 style="margin:0 0 10px;color:#0b3d91">Detail des produits vendus (aujourd'hui)</h3>
+  {% if stats.produits %}
+  <table>
+    <tr><th>Produit</th><th>Qte vendue</th><th>CA</th><th>Marge</th></tr>
+    {% for p in stats.produits %}
+    <tr><td><b>{{p.nom}}</b></td><td>{{p.qte}}</td><td style="color:#0b3d91;font-weight:bold">{{p.ca}} FC</td><td style="color:#16a34a;font-weight:bold">{{p.marge}} FC</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">Aucune vente enregistree aujourd'hui.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if view=='serveurs' %}
+<div class="card">
+  <h3 style="margin:0 0 10px;color:#0b3d91">Qui a servi quoi</h3>
+  <form method="GET" action="/dashboard" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+    <input type="hidden" name="view" value="serveurs">
+    <div class="input-group"><label>Date</label><input type="date" name="date" value="{{date_selection.strftime('%Y-%m-%d')}}"></div>
+    <button class="btn-vendre" type="submit" style="margin-top:0">Afficher</button>
+  </form>
+  {% if serveurs_data %}
+  {% for s in serveurs_data %}
+  <div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <b style="color:#0b3d91;font-size:15px">👤 {{s.nom}}</b>
+      <span>{{s.ventes|length}} facture(s) - <b>{{s.total}} FC</b>{% if s.dettes %} - <span style="color:#dc3545">dont dettes: {{s.dettes}} FC</span>{% endif %}</span>
+    </div>
+    <table>
+      <tr><th>No</th><th>Heure</th><th>Client</th><th>Articles</th><th>Total</th><th>Statut</th></tr>
+      {% for v in s.ventes %}
+      <tr>
+        <td><a href="/facture/{{v.id}}" target="_blank">{{v.id}}</a></td>
+        <td>{{v.date[11:]}}</td>
+        <td>{{v.client}}</td>
+        <td>{% for l in v.lignes %}{{l.qte}}x {{l.nom}}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td style="font-weight:bold;color:#0b3d91">{{v.total}} FC</td>
+        <td>{{'🟢 Paye' if v.statut_paiement=='paye' else '🔴 Dette'}}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="empty">Aucune facture pour cette date.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if view=='casse' %}
+<div class="card">
+  <h3 style="margin:0 0 10px;color:#dc3545">🍾 Casse / Dommage (Mwazi)</h3>
+  <div class="blue-box">Bouteille cassee ou endommagee : elle est retiree du stock automatiquement.</div>
+  <form method="POST" action="/add_casse">
+    <div class="input-row">
+      <div class="input-group" style="flex:2"><label>Produit</label>
+        <select name="produit">{% for nom,data in stock.items() %}<option value="{{nom}}">{{nom}} (Stock: {{data.qte}})</option>{% endfor %}</select>
+      </div>
+      <div class="input-group"><label>Quantite</label><input type="number" name="qte" value="1" min="1" required></div>
+    </div>
+    <div class="input-group" style="margin-top:10px"><label>Motif (optionnel)</label><input name="motif" placeholder="Ex: bouteille tombee, fissuree..."></div>
+    <button class="btn-vendre" type="submit" style="background:#dc3545">- Enregistrer la casse</button>
+  </form>
+  <h4 style="margin:18px 0 6px;color:#0b3d91">Historique des casses</h4>
+  {% if casses %}
+  <table>
+    <tr><th>Date</th><th>Produit</th><th>Qte</th><th>Motif</th>{% if role=='Gérant' %}<th>Perte</th>{% endif %}</tr>
+    {% for c in casses %}
+    <tr><td>{{c.date}}</td><td><b>{{c.produit}}</b></td><td>{{c.qte}}</td><td>{{c.motif}}</td>{% if role=='Gérant' %}<td style="color:#dc3545;font-weight:bold">-{{c.cout}} FC</td>{% endif %}</tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">Aucune casse enregistree.</div>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if view=='depenses' %}
@@ -496,7 +615,7 @@ new Chart(document.getElementById('chartProduits'), {
   <div class="blue-box">Utile en fin de mois (ou d'annee en annee) pour voir combien tu as vendu chaque jour.</div>
   {% if historique %}
   <table>
-    <tr><th>Date</th><th>Ventes</th><th>CA brut</th><th>Depenses</th><th>CA net</th><th>Marge</th></tr>
+    <tr><th>Date</th><th>Ventes</th><th>CA brut</th><th>Depenses</th><th>CA net</th><th>Marge</th><th>Produits vendus</th></tr>
     {% for j in historique %}
     <tr>
       <td>{{j.date}}</td>
@@ -505,6 +624,7 @@ new Chart(document.getElementById('chartProduits'), {
       <td style="color:#dc3545">-{{j.depenses}} FC</td>
       <td style="font-weight:bold">{{j.ca_net}} FC</td>
       <td style="color:#16a34a;font-weight:bold">{{j.marge}} FC</td>
+      <td style="font-size:11px">{% for p in j.produits %}{{p.nom}} x{{p.qte}}{% if not loop.last %}, {% endif %}{% endfor %}</td>
     </tr>
     {% endfor %}
     <tr style="background:#eef3ff;font-weight:bold">
@@ -514,12 +634,24 @@ new Chart(document.getElementById('chartProduits'), {
       <td style="color:#dc3545">-{{totaux_mois.depenses}} FC</td>
       <td>{{totaux_mois.ca_net}} FC</td>
       <td style="color:#16a34a">{{totaux_mois.marge}} FC</td>
+      <td></td>
     </tr>
   </table>
   {% else %}
   <div class="empty">Aucune vente ni depense enregistree ce mois-ci.</div>
   {% endif %}
 </div>
+{% if produits_mois %}
+<div class="card">
+  <h3 style="margin:0 0 10px;color:#0b3d91">Produits vendus - {{noms_mois[mois_selection-1]}} {{annee_selection}}</h3>
+  <table>
+    <tr><th>Produit</th><th>Qte vendue</th><th>CA</th><th>Marge</th></tr>
+    {% for p in produits_mois %}
+    <tr><td><b>{{p.nom}}</b></td><td>{{p.qte}}</td><td style="color:#0b3d91;font-weight:bold">{{p.ca}} FC</td><td style="color:#16a34a;font-weight:bold">{{p.marge}} FC</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
 {% endif %}
 
 {% if view=='abo' %}
@@ -557,10 +689,11 @@ td{border:1px solid #ddd;padding:10px}
   <div style="text-align:right"><b>FACTURE</b><br>{{v.id}}<br>{{v.date}}<br>Vendeur: {{v.vendeur}}</div>
 </div>
 <p><b>Client:</b> {{v.client}}{% if v.tel %} - {{v.tel}}{% endif %}</p>
+{% if v.serveur %}<p><b>Servi par:</b> {{v.serveur}}</p>{% endif %}
 {% if v.statut_paiement=='non_paye' %}
 <p style="background:#f8d7da;color:#721c24;padding:10px;border-radius:8px;font-weight:bold">🔴 DETTE - Facture non payee</p>
 {% else %}
-<p style="background:#d4edda;color:#155724;padding:10px;border-radius:8px;font-weight:bold">🟢 Payee (Cash)</p>
+<p style="background:#d4edda;color:#155724;padding:10px;border-radius:8px;font-weight:bold">🟢 Payee{% if v.date_paiement %} le {{v.date_paiement}}{% endif %}</p>
 {% endif %}
 <table>
   <tr><th>Description</th><th>Qte</th><th>PU</th><th>Total</th></tr>
@@ -628,7 +761,7 @@ def dashboard():
         return redirect('/')
 
     view = request.args.get('view', 'vente')
-    if view in ('inventaire', 'stats', 'historique') and session.get('role') != 'Gérant':
+    if view in ('inventaire', 'stats', 'historique', 'serveurs') and session.get('role') != 'Gérant':
         view = 'vente'
     cart = get_cart()
     cart_total = sum(l['qte'] * l['prix_vente'] for l in cart)
@@ -663,9 +796,37 @@ def dashboard():
             "ca_net_jour": ca_net_jour,
             "marge_jour": marge_jour,
             "top_produit": top_produit,
+            "produits": detail_produits(ventes_jour),
             "labels": list(qte_par_produit.keys()),
             "data": list(qte_par_produit.values()),
         }
+
+    serveurs_connus = []
+    if view == 'vente':
+        serveurs_connus = sorted({r[0] for r in db.session.query(Vente.serveur).distinct().all() if r[0]})
+
+    date_selection = None
+    serveurs_data = None
+    if view == 'serveurs':
+        try:
+            date_selection = datetime.strptime(request.args.get('date', ''), '%Y-%m-%d').date()
+        except ValueError:
+            date_selection = date.today()
+        groupes = {}
+        for v in ventes:
+            if v['timestamp'].date() == date_selection:
+                nom_s = v['serveur'] or 'NON RENSEIGNE'
+                g = groupes.setdefault(nom_s, {"nom": nom_s, "ventes": [], "total": 0, "dettes": 0})
+                g["ventes"].append(v)
+                g["total"] += v['total']
+                if v['statut_paiement'] == 'non_paye':
+                    g["dettes"] += v['total']
+        serveurs_data = sorted(groupes.values(), key=lambda g: g["nom"])
+
+    casses = None
+    if view == 'casse':
+        casses = [{"date": c.date, "produit": c.produit, "qte": c.qte, "motif": c.motif, "cout": c.cout}
+                  for c in Casse.query.order_by(Casse.timestamp.desc()).all()]
 
     depenses = None
     if view == 'depenses':
@@ -674,6 +835,7 @@ def dashboard():
 
     historique = None
     totaux_mois = None
+    produits_mois = None
     mois_selection = None
     annee_selection = None
     annees_disponibles = None
@@ -711,6 +873,13 @@ def dashboard():
                     jours[jour] = {"nb_ventes": 0, "ca": 0, "marge": 0, "depenses": 0}
                 jours[jour]["depenses"] += d.total
 
+        ventes_mois = [v for v in ventes
+                       if v['timestamp'].year == annee_selection and v['timestamp'].month == mois_selection]
+        produits_mois = detail_produits(ventes_mois)
+        par_jour = {}
+        for v in ventes_mois:
+            par_jour.setdefault(v['timestamp'].date(), []).append(v)
+
         historique = []
         for jour in sorted(jours.keys(), reverse=True):
             info = jours[jour]
@@ -721,6 +890,7 @@ def dashboard():
                 "depenses": info["depenses"],
                 "ca_net": info["ca"] - info["depenses"],
                 "marge": info["marge"],
+                "produits": detail_produits(par_jour.get(jour, [])),
             })
 
         totaux_mois = {
@@ -735,7 +905,9 @@ def dashboard():
         DASH_HTML, b=BOUTIQUE, role=session['role'], stock=stock, ventes=ventes,
         view=view, cart=cart, cart_total=cart_total, stats=stats, alertes=alertes, depenses=depenses,
         historique=historique, totaux_mois=totaux_mois, mois_selection=mois_selection,
-        annee_selection=annee_selection, annees_disponibles=annees_disponibles, noms_mois=noms_mois
+        annee_selection=annee_selection, annees_disponibles=annees_disponibles, noms_mois=noms_mois,
+        produits_mois=produits_mois, serveurs_connus=serveurs_connus, serveurs_data=serveurs_data,
+        date_selection=date_selection, casses=casses
     )
 
 
@@ -790,6 +962,7 @@ def finalize_sale():
 
     client = request.form.get('client', '').strip() or "Client"
     tel = request.form.get('tel', '').strip()
+    serveur = request.form.get('serveur', '').strip().upper()[:60] or 'NON RENSEIGNE'
     mode_paiement = request.form.get('mode_paiement', 'cash')
     if mode_paiement not in ('cash', 'dette'):
         mode_paiement = 'cash'
@@ -801,6 +974,7 @@ def finalize_sale():
         timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
         client=client, tel=tel, vendeur=session.get('role'),
         total=0, marge=0, mode_paiement=mode_paiement, statut_paiement=statut_paiement,
+        serveur=serveur,
     )
 
     total = 0
@@ -916,13 +1090,40 @@ def delete_pro(nom):
     return redirect('/dashboard?view=inventaire')
 
 
+@app.route('/add_casse', methods=['POST'])
+def add_casse():
+    """Enregistre une bouteille/produit casse ou endommage (mwazi) et le deduit du stock."""
+    if 'role' not in session:
+        return redirect('/')
+    nom = request.form.get('produit', '').strip().upper()
+    motif = request.form.get('motif', '').strip() or 'Casse'
+    try:
+        qte = int(request.form.get('qte', 0))
+    except ValueError:
+        return redirect('/dashboard?view=casse')
+    produit = Produit.query.get(nom)
+    if produit and 0 < qte <= produit.qte:
+        produit.qte -= qte
+        now = datetime.now()
+        db.session.add(Casse(
+            id="CAS" + now.strftime('%y%m%d%H%M%S'),
+            timestamp=now, date=now.strftime('%d/%m/%Y %H:%M'),
+            produit=nom, qte=qte, motif=motif, cout=qte * produit.prix_achat,
+        ))
+        db.session.commit()
+    return redirect('/dashboard?view=casse')
+
+
 @app.route('/marquer_paye/<fid>')
 def marquer_paye(fid):
-    if session.get('role') != 'Gérant':
-        return redirect('/dashboard?view=factures')
+    """Consigne le paiement d'une dette (Gerant ou Vendeur) avec la date et qui l'a enregistre."""
+    if 'role' not in session:
+        return redirect('/')
     v = Vente.query.get(fid)
-    if v:
+    if v and v.statut_paiement == 'non_paye':
         v.statut_paiement = 'paye'
+        v.date_paiement = datetime.now().strftime('%d/%m/%Y %H:%M')
+        v.paye_par = session.get('role')
         db.session.commit()
     return redirect('/dashboard?view=factures')
 
