@@ -24,12 +24,12 @@ BOUTIQUE = {
     "tels": "0994613894 / 0976844928 / 0826445928",
     "adresse": "Q. FILTISAF / Av DE LA VICTOIRE",
     "couleur": "#0b3d91",
-    "expire": "24/10/2026",
+    "expire": "28/11/2026",
     "mpesa": "0861527310",
     "orange": "0847139266"
 }
 
-EXPIRE_DATE = datetime(2026, 10, 24, 23, 59, 59)
+EXPIRE_DATE = datetime(2026, 11, 28, 23, 59, 59)
 
 SEUIL_ALERTE_STOCK = 5   # en dessous de cette quantite, le produit est signale en alerte
 PIN_GERANT = "1234"
